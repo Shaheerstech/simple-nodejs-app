@@ -17,5 +17,8 @@ steps:
 
 - script: |
     npm install
-    npm run build
-  displayName: 'npm install and build'
+    npm audit        # Run npm audit to identify and show vulnerabilities
+    npm audit fix    # Attempt to automatically fix vulnerabilities
+    npm run build    # Run your build script
+  displayName: 'npm install, audit, and build'
+
