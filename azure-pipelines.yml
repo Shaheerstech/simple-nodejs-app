@@ -1,24 +1,109 @@
-# Node.js
-# Build a general Node.js project with npm.
-# Add steps that analyze code, save build artifacts, deploy, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
+pr:
+  autoCancel: true
+  # if true, AutoCancel will cancel the existing deployment and replace it if a new pull request is created during deployment.
+  branches:
+    include:
+      - development
+  # Only trigger the pipeline when the pull request is approved
+  # condition: and(succeeded(), eq(variables['System.PullRequest.IsDraft'], 'false'), eq(variables['System.PullRequest.IsApproved'], 'true'))
 
-trigger:
-- master
+# trigger: 
+# - development
 
-pool:
-  vmImage: ubuntu-latest
+resources:
+- repo: self
 
-steps:
-- task: NodeTool@0
-  inputs:
-    versionSpec: '10.x'
-  displayName: 'Install Node.js'
+variables:
+  tag: '$(Build.BuildId)'
+  projectname: 'my-dev'
 
-- script: |
-    npm install
-    npm audit        # Run npm audit to identify and show vulnerabilities
-    npm audit fix    # Attempt to automatically fix vulnerabilities
-    npm run build    # Run your build script
-  displayName: 'npm install, audit, and build'
+stages:
+- stage: Deploy
+  displayName: Build / Deploy Images
+  jobs:
+  - job: Build
+    timeoutInMinutes: 120
+    displayName: Build
+    pool:
+      name: 'Video Analytics Agents (Prod)'
+      demands:
+      - Agent.OS -equals Linux
+      - docker
+      - Agent.Name -equals agentname
+    steps:
+    - checkout: self
+      clean: true
 
+    - task: Bash@3
+      displayName: Build / Deploy myapp
+      inputs:
+        targetType: 'inline'
+        script: |
+          #!/bin/bash
+
+          # Set Project that container is related to, defaults to Misc
+          if [ -z ${DEP_PROJECT+x} ]; then
+            DEP_PROJECT='misc'
+          fi
+
+          # Set Container Name
+          DEP_NAME="myapp"
+
+          # Set the build context
+          BUILD_CONTEXT="foldername_where_code_is_available/"
+
+          # Set the tags you want to add to the image
+          TAGS="latest"
+
+          # List of ports to add to the Docker container
+          PORTS="${myapp}"
+
+          # Set the shared memory size for the container
+          SHM_SIZE="2g"
+
+          # Set the path to the environment file (default to .env)
+          ENV_FILE="${ENV_FILE:-.env}"
+
+          # Check if the Docker binary exists
+          if ! command -v docker &> /dev/null
+          then
+              echo "Error: Docker binary not found."
+              exit 1 # Exit and indicate error
+          fi
+
+          # Set a variable to indicate whether or not to use cache during the build
+          if [ -z ${USE_CACHE+x} ]; then
+            USE_CACHE=true
+          fi
+          # Set the name of the image
+          IMAGE_NAME="${DEP_PROJECT}-${DEP_NAME}"
+
+          # Build the Docker image with the given name, with or without cache
+          if [ "$USE_CACHE" = true ]; then
+              docker build -t "$IMAGE_NAME" --shm-size="$SHM_SIZE" "$BUILD_CONTEXT"
+          else
+              docker build --no-cache -t "$IMAGE_NAME" --shm-size="$SHM_SIZE" "$BUILD_CONTEXT"
+          fi
+
+          # Add the tags to the image
+          for tag in $TAGS; do
+              docker tag "$IMAGE_NAME" "$IMAGE_NAME:$tag"
+              echo "Tagging Image $IMAGE_NAME:$tag"
+          done
+
+          # Set the name of the container
+          CONTAINER_NAME="${DEP_PROJECT}-${DEP_NAME}"
+
+          # Check if the container already exists
+          if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
+              # Stop the existing container
+              docker stop $CONTAINER_NAME
+
+              # Remove the existing container, with error handling to forcibly remove it if there's an issue
+              if ! docker rm $CONTAINER_NAME; then
+                  echo "Error: Failed to remove existing container. Forcibly removing container..."
+                  docker rm -f $CONTAINER_NAME
+              fi
+          fi
+
+        workingDirectory: 'src/'
